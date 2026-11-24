@@ -1,0 +1,46 @@
+# Local game files and runtime data
+/data/
+/src/assets/
+/src/solar.ico
+/src/solar.png
+*.gba
+*.nds
+*.srl
+*.sav
+*.sa1
+*.sgm
+*.ml1
+
+# Build and release output
+/stage/
+/outputs/
+/native-build/
+/native-ds-build/
+CMakeFiles/
+CMakeCache.txt
+*.exe
+*.dll
+*.obj
+*.pdb
+*.lib
+*.tmp
+__pycache__/
+.vs/
+
+# Workspace experiments and reference checkouts
+/.*-qa-*/
+/.boksol-*/
+/bok2-save/
+/bok3-save/
+/ds-probe/
+/ds-save/
+/qa/
+/legacy-window-engine/
+/saito-reference-*/
+/trill-reference/
+/*.cs
+/*.cpp
+/*.h
+/*.xrc
+/fetch-engines.py
+/gba-menu-probe.py
