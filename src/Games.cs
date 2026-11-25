@@ -21,6 +21,7 @@ namespace Boksol
 
         public readonly string Id, Title, Subtitle, Code, KnownHash, KnownLanguage, Guide;
         public readonly bool IsDs;
+        public int MaxPlayers { get { return Id == "boktai3" ? 2 : 4; } }
         public string Extension { get { return IsDs ? ".nds" : ".gba"; } }
         public string Platform { get { return IsDs ? "NINTENDO DS" : "GAME BOY ADVANCE"; } }
         public string RomPath, PatchPath, SavePath, BattleSaveId, OriginalHash;
@@ -112,8 +113,8 @@ namespace Boksol
             AtomicWrite(saveName, save);
             if (!IsDs)
             {
-                string linked = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(rom.Path),
-                    Id + (role == "host" ? "-1.sav" : "-2.sav"));
+                string seat = role == "host" ? "1" : role == "guest-3" ? "3" : role == "guest-4" ? "4" : "2";
+                string linked = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(rom.Path), Id + "-" + seat + ".sav");
                 AtomicWrite(linked, save);
             }
             if (start != null)

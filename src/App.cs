@@ -60,7 +60,11 @@ namespace Boksol
         private readonly PictureBox brandIcon;
         private readonly Label brandName;
         private readonly Button back;
-        private readonly TextBox invitation;
+        private readonly TextBox invitation, signalingAddress, playerNameEditor;
+        private readonly ComboBox roomSizeEditor;
+        private Label matchMode, roomPlayers;
+        private Uri signalingServer;
+        private string playerName = "";
         private readonly GameKeyBindings bindings = new GameKeyBindings();
         private StartupScreen startup;
         private readonly GameViewport viewport;
@@ -315,8 +319,31 @@ namespace Boksol
             Place(settings, selectSave, 315, 406, 146, 38);
             autoRecord = new CheckBox { Text = "联机启动后自动录制", ForeColor = Ink, BackColor = Surface, AutoSize = true };
             Place(connectionSettings, Caption("联机与录像", 21, Ink, true), 1, 12, 385, 57);
-            Place(connectionSettings, autoRecord, 2, 88, 340, 25);
-            Stretch(connectionSettings, Caption("双方在同一局域网输入相同联机码。软件自动选定主机；开启观战后才会发送游戏画面。", 11, Quiet), 2, 131, 8, 62);
+            Place(connectionSettings, Caption("名字", 12, Ink, true), 2, 78, 350, 29);
+            playerNameEditor = TextField();
+            playerNameEditor.Font = new Font("Microsoft YaHei UI", 11);
+            playerNameEditor.MaxLength = RoomRoster.NameLimit;
+            Stretch(connectionSettings, playerNameEditor, 2, 114, 104, 36);
+            Place(connectionSettings, Caption("信令服务器地址", 12, Ink, true), 2, 162, 350, 29);
+            signalingAddress = TextField();
+            signalingAddress.MaxLength = 512;
+            Stretch(connectionSettings, signalingAddress, 2, 198, 104, 36);
+            AtRight(connectionSettings, ActionButton("保存", SaveConnectionSettings), 92, 196, 92, 36);
+            KeyEventHandler saveConnection = (s, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                SaveConnectionSettings();
+            };
+            signalingAddress.KeyDown += saveConnection;
+            playerNameEditor.KeyDown += saveConnection;
+            Stretch(connectionSettings, Caption("留空使用局域网配对。远程玩家使用同一地址，以 ws:// 或 wss:// 开头。", 10, Quiet), 2, 235, 8, 41);
+            Place(connectionSettings, Caption("远程房间人数", 12, Ink, true), 2, 280, 139, 30);
+            roomSizeEditor = new ComboBox { BackColor = InputColor, ForeColor = Ink,
+                DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
+            roomSizeEditor.Items.AddRange(new object[] { "2 人", "3 人", "4 人" });
+            Place(connectionSettings, roomSizeEditor, 151, 280, 94, 35);
+            Place(connectionSettings, autoRecord, 2, 340, 340, 25);
             Place(controlSettings, Caption("游戏键位", 21, Ink, true), 1, 12, 385, 57);
             Place(controlSettings, ActionButton("自定义键位", ShowKeyBindings), 2, 88, 152, 43);
             Place(infoSettings, Caption(AppIdentity.Name, 22, Gold, true), 1, 12, 385, 57);
@@ -329,6 +356,7 @@ namespace Boksol
             LoadSettings();
             RefreshRomSlots();
             autoRecord.CheckedChanged += (s, e) => StoreSettings();
+            roomSizeEditor.SelectedIndexChanged += (s, e) => StoreSettings();
             ShowStartup(updateCheck);
             FormClosing += ClosingLobby;
             RefreshControls();
@@ -486,6 +514,7 @@ namespace Boksol
             copy.Enabled = invitation.Text.Length > 0;
             copy.Text = watchCode == null ? "复制联机码" : "复制观战码";
             invitation.ReadOnly = !idle;
+            roomSizeEditor.Enabled = idle && signalingServer != null && Game.MaxPlayers > 2;
             record.Enabled = emulator != null && currentRecording == null;
             stopRecord.Enabled = currentRecording != null;
             play.Enabled = export.Enabled = remove.Enabled = movies.SelectedItem != null;
@@ -499,7 +528,7 @@ namespace Boksol
         private void GenerateCode()
         {
             invitation.Text = CodeRoom.FormatCode(CodeRoom.CreateCode());
-            roomStatus.Text = "把这个联机码发给对方，双方点击“开始配对”。";
+            roomStatus.Text = "把联机码发给其他玩家，然后点击“开始配对”。";
         }
 
         private async void StartRoom()
@@ -518,8 +547,12 @@ namespace Boksol
                 if (busy || emulator != null || battleSave == null) return;
             }
             BattleSave chosen = battleSave;
+            Uri address = signalingServer;
+            string name = playerName;
+            int seats = Math.Min(game.MaxPlayers, roomSizeEditor.SelectedIndex + 2);
             busy = true;
             room = new CodeRoom();
+            roomPlayers.Text = "";
             roomStatus.Text = "正在准备 ROM 与存档";
             RefreshControls();
             try
@@ -530,12 +563,17 @@ namespace Boksol
                     throw new InvalidDataException("ROM 已变化，请重新选择游戏和对战存档。");
                 byte[] save = await Task.Run(() => BattleSaves.Read(game, chosen, image.Hash));
                 room.Token.ThrowIfCancellationRequested();
-                roomStatus.Text = "正在局域网查找同码玩家";
-                using (var match = await room.Find(code, game.Id, image.Hash))
+                roomStatus.Text = address == null ? "正在局域网查找同码玩家" : "正在信令服务器查找同码玩家";
+                var progress = new Progress<RoomRoster>(roster =>
+                {
+                    if (busy && !IsDisposed)
+                        roomPlayers.Text = roster.Joined + "/" + roster.Capacity + " · " + roster.Summary();
+                });
+                using (var match = await room.Find(code, game.Id, image.Hash, address, name, seats, progress))
                 {
                     try
                     {
-                        roomStatus.Text = "双方版本一致，正在准备游戏";
+                        roomStatus.Text = "游戏版本一致，正在准备游戏";
                         var rom = await BattleLaunch.Prepare(game, data, image, save, match, room.Token);
                         room.Token.ThrowIfCancellationRequested();
                         await Launch(game, rom, match, room.Token);
@@ -611,7 +649,7 @@ namespace Boksol
                 stop.ThrowIfCancellationRequested();
                 if (match != null)
                 {
-                    if (rom.HasBattleStart) roomStatus.Text = "双方已连接，正在准备原作对战";
+                    if (rom.HasBattleStart) roomStatus.Text = "房间玩家已连接，正在准备原作对战";
                     entry = await BattleLaunch.Enter(game, rom, session, match, stop);
                 }
                 stop.ThrowIfCancellationRequested();
@@ -630,12 +668,12 @@ namespace Boksol
                 throw;
             }
             emulator = session;
-            battleHostAddress = match != null && match.IsHost ? match.LocalAddress : null;
+            battleHostAddress = match != null && match.IsHost && match.Remote == null ? match.LocalAddress : null;
             stoppingGame = false;
             SelectPage(3);
             viewport.Mount(session);
-            roomStatus.Text = match == null ? "本地游戏已启动" : "双方游戏连线已建立";
-            gameStatus.Text = match == null ? "本地游戏" : (match.IsHost ? "玩家 1" : "玩家 2") + " · " + entry;
+            roomStatus.Text = match == null ? "本地游戏已启动" : "游戏连线已建立";
+            gameStatus.Text = match == null ? "本地游戏" : match.Roster.Name(match.Seat) + " · " + entry;
             RefreshControls();
             ObserveGame(session);
             if (match != null && autoRecord.Checked) StartRecording();
@@ -940,6 +978,15 @@ namespace Boksol
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
             autoRecord.Checked = lines.Contains("autorecord=1");
+            Func<string, string> setting = key => lines.FirstOrDefault(l => l.StartsWith(key + "=", StringComparison.Ordinal))
+                ?.Substring(key.Length + 1);
+            string address = setting(RemoteRoom.SettingsKey);
+            if (address != null && RemoteRoom.TryAddress(address, out signalingServer)) signalingAddress.Text = address;
+            if (RoomRoster.TryDecodeName(setting(RoomRoster.NameKey) ?? "", out playerName))
+                playerNameEditor.Text = playerName;
+            roomSizeEditor.SelectedIndex = Int32.TryParse(setting(RoomRoster.SeatsKey), out int seats) &&
+                seats >= 2 && seats <= 4 ? seats - 2 : 0;
+            UpdateMatchMode();
             string[] defaults = { "续我们的太阳.gba", "新我们的太阳.gba", "我们的太阳DS.nds" };
             for (int i = 0; i < Game.All.Length; i++)
             {
@@ -959,6 +1006,28 @@ namespace Boksol
             }
         }
 
+        private void SaveConnectionSettings()
+        {
+            string value = signalingAddress.Text.Trim();
+            if (!RemoteRoom.TryAddress(value, out var address))
+            {
+                MessageBox.Show(this, "请输入以 ws:// 或 wss:// 开头的有效信令服务器地址。", "信令服务器地址");
+                return;
+            }
+            signalingServer = address;
+            signalingAddress.Text = value;
+            playerName = RoomRoster.CleanName(playerNameEditor.Text);
+            playerNameEditor.Text = playerName;
+            StoreSettings();
+            UpdateMatchMode();
+            RefreshControls();
+        }
+
+        private void UpdateMatchMode()
+        {
+            matchMode.Text = signalingServer == null ? "局域网配对" : "远程配对";
+        }
+
         private void StoreSettings()
         {
             try
@@ -967,6 +1036,9 @@ namespace Boksol
                 string entries = String.Join("\n", Game.All.Select(g => g.Id + "|" + g.RomPath + "|" + g.PatchPath + "|" +
                     g.SavePath + "|" + g.BattleSaveId)) +
                     "\nautorecord=" + (autoRecord.Checked ? "1" : "0");
+                if (signalingServer != null) entries += "\n" + RemoteRoom.SettingsKey + "=" + signalingServer.AbsoluteUri;
+                if (playerName.Length != 0) entries += "\n" + RoomRoster.NameKey + "=" + RoomRoster.EncodeName(playerName);
+                entries += "\n" + RoomRoster.SeatsKey + "=" + (roomSizeEditor.SelectedIndex + 2);
                 Game.AtomicWrite(Path.Combine(data, "rom-paths.txt"), Encoding.UTF8.GetBytes(entries));
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "无法保存设置"); }

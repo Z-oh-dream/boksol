@@ -10,7 +10,7 @@ cmake --build native-ds-build --config Release
 ./build.ps1
 ```
 
-The build writes `stage/boksol.exe` and copies both core DLLs into `stage/engines`. The matching Microsoft Visual C++ x64 runtime is required on the target machine or alongside the core DLLs. This source archive contains the engine code used by the build.
+The build writes `stage/boksol.exe` and copies both core DLLs into `stage/engines`. Use a Microsoft Visual C++ x64 runtime at least as recent as the toolset used to build the cores. If bundling the runtime, place the matching DLLs in `stage/engines`. This source archive contains the engine code used by the build.
 
 - VBA-M 2.2.3, commit `48ed03b02701b1cd72cbededeb07d9bc18bcee03`, https://github.com/visualboyadvance-m/visualboyadvance-m
 - melonDS 1.1, commit `b86390e4428bf38ce4c1ce0e9ca446d6d25955e8`, https://github.com/melonDS-emu/melonDS

@@ -4,6 +4,9 @@ using System.Drawing;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+#if ANDROID
+using Bitmap = Boksol.FramePixels;
+#endif
 
 namespace Boksol
 {

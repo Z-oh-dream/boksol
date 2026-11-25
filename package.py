@@ -8,6 +8,7 @@ from pathlib import Path
 
 PROJECT = "boksol"
 ROOT_FILES = (".gitignore", "README.md", "build.ps1", "package.py", "说明.txt")
+SERVER_FILES = (".gitignore", "Boksol.Server.csproj", "Program.cs", "README.md")
 VENDOR_TREES = ("vbam", "melonds", "native-deps/enet")
 VENDOR_EXCLUDED_DIRS = {".git", ".vs", ".idea", "build", "CMakeFiles", "__pycache__"}
 VENDOR_EXCLUDED_SUFFIXES = {
@@ -42,7 +43,12 @@ def vendor_files(folder: Path):
 
 def source_files(work: Path, include_local_assets: bool):
     files = [work / name for name in ROOT_FILES]
+    files.extend(work / "server" / name for name in SERVER_FILES)
     files.extend((work / "src").glob("*.cs"))
+    android = work / "android"
+    if android.is_dir():
+        files.extend(android.glob("*.cs"))
+        files.extend(android / name for name in ("Boksol.Android.csproj", "build.ps1", "Properties/AndroidManifest.xml"))
     files.extend(path for path in (work / "native").rglob("*")
                  if path.is_file() and (path.suffix in {".cpp", ".h", ".cmake", ".md"} or path.name == "CMakeLists.txt"))
     for vendor in VENDOR_TREES:
@@ -76,6 +82,11 @@ def package_source(work: Path, version: str) -> Path:
     return write_archive(target, source_files(work, include_local_assets=False))
 
 
+def package_server(work: Path, version: str) -> Path:
+    target = work / "outputs" / f"{PROJECT}-{version}-server-source.zip"
+    return write_archive(target, {name: work / "server" / name for name in SERVER_FILES})
+
+
 def package(work: Path, version: str) -> Path:
     stage = work / "stage"
     executable = f"{PROJECT}.exe"
@@ -105,9 +116,11 @@ def package(work: Path, version: str) -> Path:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Package the Windows application or GitHub source tree.")
     parser.add_argument("version", help="version used in the ZIP filename, e.g. 0.5.4")
-    parser.add_argument("--source", action="store_true", help="export the clean GitHub source tree")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--source", action="store_true", help="export the clean GitHub source tree")
+    scope.add_argument("--server", action="store_true", help="export only the standalone signaling server source")
     arguments = parser.parse_args()
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]*", arguments.version):
         parser.error("version must contain only ASCII letters, numbers, periods, plus signs or hyphens")
-    create_archive = package_source if arguments.source else package
+    create_archive = package_server if arguments.server else package_source if arguments.source else package
     print(create_archive(Path(__file__).resolve().parent, arguments.version))

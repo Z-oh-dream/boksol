@@ -1,5 +1,11 @@
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 #include <chrono>
+#include <condition_variable>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -17,16 +23,23 @@ void SignalStop(StopReason, void*) { gdsStopped = true; }
 std::string GetLocalFilePath(const std::string& path) { return path; }
 
 FileHandle* OpenFile(const std::string& path, FileMode mode) {
+    const bool write = (mode & Write) != 0;
+    const bool preserve = (mode & (Preserve | NoCreate)) != 0;
+#ifdef _WIN32
     const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, nullptr, 0);
     if (!size) return nullptr;
     std::wstring wide(size, L'\0');
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, wide.data(), size);
-    const bool write = (mode & Write) != 0;
-    const bool preserve = (mode & (Preserve | NoCreate)) != 0;
     const wchar_t* flags = !write ? L"rb" : (mode & Append) ? L"ab" : preserve ? L"r+b" :
         (mode & Read) ? L"w+b" : L"wb";
     auto* file = _wfopen(wide.c_str(), flags);
     if (!file && write && preserve && !(mode & NoCreate)) file = _wfopen(wide.c_str(), L"w+b");
+#else
+    const char* flags = !write ? "rb" : (mode & Append) ? "ab" : preserve ? "r+b" :
+        (mode & Read) ? "w+b" : "wb";
+    auto* file = fopen(path.c_str(), flags);
+    if (!file && write && preserve && !(mode & NoCreate)) file = fopen(path.c_str(), "w+b");
+#endif
     return reinterpret_cast<FileHandle*>(file);
 }
 
@@ -44,10 +57,20 @@ bool CheckFileWritable(const std::string& path) {
 bool CheckLocalFileWritable(const std::string& path) { return CheckFileWritable(path); }
 bool IsEndOfFile(FileHandle* file) { return feof(reinterpret_cast<FILE*>(file)) != 0; }
 bool FileReadLine(char* str, int n, FileHandle* file) { return fgets(str, n, reinterpret_cast<FILE*>(file)); }
-u64 FilePosition(FileHandle* file) { return _ftelli64(reinterpret_cast<FILE*>(file)); }
+u64 FilePosition(FileHandle* file) {
+#ifdef _WIN32
+    return _ftelli64(reinterpret_cast<FILE*>(file));
+#else
+    return ftello(reinterpret_cast<FILE*>(file));
+#endif
+}
 bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin) {
     int from = origin == FileSeekOrigin::Start ? SEEK_SET : origin == FileSeekOrigin::Current ? SEEK_CUR : SEEK_END;
+#ifdef _WIN32
     return _fseeki64(reinterpret_cast<FILE*>(file), offset, from) == 0;
+#else
+    return fseeko(reinterpret_cast<FILE*>(file), offset, from) == 0;
+#endif
 }
 void FileRewind(FileHandle* file) { rewind(reinterpret_cast<FILE*>(file)); }
 u64 FileRead(void* data, u64 size, u64 count, FileHandle* file) {
@@ -77,15 +100,34 @@ struct Thread { std::thread value; };
 Thread* Thread_Create(std::function<void()> func) { return new Thread{std::thread(std::move(func))}; }
 void Thread_Wait(Thread* thread) { if (thread->value.joinable()) thread->value.join(); }
 void Thread_Free(Thread* thread) { Thread_Wait(thread); delete thread; }
-struct Semaphore { HANDLE value; };
-Semaphore* Semaphore_Create() { return new Semaphore{CreateSemaphoreW(nullptr, 0, 0x7fffffff, nullptr)}; }
-void Semaphore_Free(Semaphore* semaphore) { CloseHandle(semaphore->value); delete semaphore; }
+struct Semaphore {
+    std::mutex mutex;
+    std::condition_variable ready;
+    int count = 0;
+};
+Semaphore* Semaphore_Create() { return new Semaphore; }
+void Semaphore_Free(Semaphore* semaphore) { delete semaphore; }
 bool Semaphore_TryWait(Semaphore* semaphore, int timeout) {
-    return WaitForSingleObject(semaphore->value, timeout < 0 ? INFINITE : timeout) == WAIT_OBJECT_0;
+    std::unique_lock lock(semaphore->mutex);
+    const auto ready = [&] { return semaphore->count > 0; };
+    if (timeout < 0) semaphore->ready.wait(lock, ready);
+    else if (!semaphore->ready.wait_for(lock, std::chrono::milliseconds(timeout), ready)) return false;
+    --semaphore->count;
+    return true;
 }
-void Semaphore_Reset(Semaphore* semaphore) { while (Semaphore_TryWait(semaphore, 0)) {} }
+void Semaphore_Reset(Semaphore* semaphore) {
+    std::lock_guard lock(semaphore->mutex);
+    semaphore->count = 0;
+}
 void Semaphore_Wait(Semaphore* semaphore) { Semaphore_TryWait(semaphore, -1); }
-void Semaphore_Post(Semaphore* semaphore, int count) { ReleaseSemaphore(semaphore->value, count, nullptr); }
+void Semaphore_Post(Semaphore* semaphore, int count) {
+    {
+        std::lock_guard lock(semaphore->mutex);
+        semaphore->count += count;
+    }
+    if (count == 1) semaphore->ready.notify_one();
+    else semaphore->ready.notify_all();
+}
 struct Mutex { std::mutex value; };
 Mutex* Mutex_Create() { return new Mutex; }
 void Mutex_Free(Mutex* mutex) { delete mutex; }
@@ -136,9 +178,17 @@ bool Addon_KeyDown(KeyType, void*) { return false; }
 void Addon_RumbleStart(u32, void*) {}
 void Addon_RumbleStop(void*) {}
 float Addon_MotionQuery(MotionQueryType, void*) { return 0; }
+#ifdef _WIN32
 DynamicLibrary* DynamicLibrary_Load(const char* lib) { return reinterpret_cast<DynamicLibrary*>(LoadLibraryA(lib)); }
 void DynamicLibrary_Unload(DynamicLibrary* lib) { FreeLibrary(reinterpret_cast<HMODULE>(lib)); }
 void* DynamicLibrary_LoadFunction(DynamicLibrary* lib, const char* name) {
     return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(lib), name));
 }
+#else
+DynamicLibrary* DynamicLibrary_Load(const char* lib) {
+    return reinterpret_cast<DynamicLibrary*>(dlopen(lib, RTLD_NOW | RTLD_LOCAL));
+}
+void DynamicLibrary_Unload(DynamicLibrary* lib) { dlclose(lib); }
+void* DynamicLibrary_LoadFunction(DynamicLibrary* lib, const char* name) { return dlsym(lib, name); }
+#endif
 }

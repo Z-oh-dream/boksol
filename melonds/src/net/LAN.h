@@ -45,7 +45,7 @@ namespace melonDS
 class LAN : public MPInterface
 {
 public:
-    LAN() noexcept;
+    explicit LAN(bool relayed = false) noexcept;
     LAN(const LAN&) = delete;
     LAN& operator=(const LAN&) = delete;
     LAN(LAN&& other) = delete;
@@ -85,8 +85,8 @@ public:
 
     bool StartDiscovery();
     void EndDiscovery();
-    bool StartHost(const char* player, int numplayers);
-    bool StartClient(const char* player, const char* host);
+    bool StartHost(const char* player, int numplayers, u16 port = 7064);
+    bool StartClient(const char* player, const char* host, u16 port = 7064);
     void EndSession();
 
     std::map<u32, DiscoveryData> GetDiscoveryList();
@@ -111,6 +111,7 @@ private:
     bool Inited;
     bool Active;
     bool IsHost;
+    const bool Relayed;
 
     ENetHost* Host;
     ENetPeer* RemotePeers[16];
@@ -146,6 +147,8 @@ private:
     void ProcessClientEvent(ENetEvent& event);
     void ProcessEvent(ENetEvent& event);
     void ProcessLAN(int type);
+    void HostSetConnectivity(int id, bool connected);
+    void RelayClientPacket(ENetPeer* source, const ENetPacket* packet);
 
     int SendPacketGeneric(u32 type, u8* packet, int len, u64 timestamp);
     int RecvPacketGeneric(u8* packet, bool block, u64* timestamp);

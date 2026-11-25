@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android36.0</TargetFramework>
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <ApplicationId>io.github.z_oh_dream.boksol</ApplicationId>
+    <ApplicationTitle>我太 boksol</ApplicationTitle>
+    <ApplicationVersion>504</ApplicationVersion>
+    <ApplicationDisplayVersion>0.5.4</ApplicationDisplayVersion>
+    <BoksolAbi Condition="'$(BoksolAbi)' == ''">arm64-v8a</BoksolAbi>
+    <RuntimeIdentifier Condition="'$(BoksolAbi)' == 'arm64-v8a'">android-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(BoksolAbi)' == 'x86_64'">android-x64</RuntimeIdentifier>
+    <AndroidPackageFormats>apk</AndroidPackageFormats>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidUseAapt2>true</AndroidUseAapt2>
+    <BoksolNativeRoot Condition="'$(BoksolNativeRoot)' == ''">../.android-build/native</BoksolNativeRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../src/Games.cs;../src/GbaInitialSettings.cs;../src/BattleSaves.cs;../src/CodeRoom.cs;../src/RemoteRoom.cs;../src/RemoteGameLink.cs;../src/BattleLaunch.cs;../src/GbaPreBattle.cs;../src/DsPreBattle.cs;../src/CoreSession.cs;../src/Recording.cs;../src/Spectating.cs" />
+    <AndroidNativeLibrary Include="$(BoksolNativeRoot)/$(BoksolAbi)/libgds-gba.so;$(BoksolNativeRoot)/$(BoksolAbi)/libgds-ds.so" Abi="$(BoksolAbi)" />
+    <EmbeddedResource Include="../src/assets/boktai2.sav" LogicalName="battle.boktai2.sav" Condition="Exists('../src/assets/boktai2.sav')" />
+    <EmbeddedResource Include="../src/assets/boktai2.start.sgm" LogicalName="battle.boktai2.start" Condition="Exists('../src/assets/boktai2.start.sgm')" />
+    <EmbeddedResource Include="../src/assets/boktai3.sav" LogicalName="battle.boktai3.sav" Condition="Exists('../src/assets/boktai3.sav')" />
+    <EmbeddedResource Include="../src/assets/boktai3.start.sgm" LogicalName="battle.boktai3.start" Condition="Exists('../src/assets/boktai3.start.sgm')" />
+    <EmbeddedResource Include="../src/assets/boktaids.sav" LogicalName="battle.boktaids.sav" Condition="Exists('../src/assets/boktaids.sav')" />
+    <EmbeddedResource Include="../src/assets/boktaids.host.start.ml1" LogicalName="battle.boktaids.start.host" Condition="Exists('../src/assets/boktaids.host.start.ml1')" />
+    <EmbeddedResource Include="../src/assets/boktaids.guest.start.ml1" LogicalName="battle.boktaids.start.guest" Condition="Exists('../src/assets/boktaids.guest.start.ml1')" />
+  </ItemGroup>
+</Project>

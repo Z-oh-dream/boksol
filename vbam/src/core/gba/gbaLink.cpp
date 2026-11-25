@@ -27,6 +27,7 @@
 #include <string>
 
 #include "../../../third_party/sfml/include/SFML/Network.hpp"
+#include "../../../third_party/sfml/include/SFML/System/Clock.hpp"
 
 #include <libintl.h>
 #define _(x) gettext(x)
@@ -95,6 +96,7 @@ bool speedhack = true;
 uint16_t IP_LINK_PORT = 5738;
 
 std::string IP_LINK_BIND_ADDRESS = "*";
+bool IP_LINK_RELAYED = false;
 
 #if !defined(_WIN32)
 
@@ -849,40 +851,52 @@ void CableServer::Send(void)
     return;
 }
 
+static bool ReadCableFrame(sf::TcpSocket& socket, char* buffer, size_t payloadSize,
+                           size_t disconnectSize, size_t received = 0)
+{
+    sf::SocketSelector readable;
+    readable.add(socket);
+    sf::Clock timer;
+    size_t size = 1;
+    do {
+        if (received != 0 && size == 1) {
+            size = static_cast<uint8_t>(buffer[0]);
+            if (size != payloadSize && size != disconnectSize)
+                return false;
+        }
+        auto remaining = sf::milliseconds(linktimeout) - timer.getElapsedTime();
+        if (remaining <= sf::Time::Zero || !readable.wait(remaining))
+            return false;
+        size_t count = 0;
+        if (socket.receive(buffer + received, size - received, count) != sf::Socket::Status::Done || count == 0)
+            return false;
+        received += count;
+    } while (size == 1 || received < size);
+    return size == payloadSize || static_cast<uint8_t>(buffer[1]) == 0xe0;
+}
+
 // Receive data from all slaves to master
 void CableServer::Recv(void)
 {
-    int numbytes;
     if (lanlink.type == 0) { // TCP
         fdset.clear();
 
         for (int i = 0; i < lanlink.numslaves; i++)
             fdset.add(tcpsocket[i + 1]);
 
-        if (fdset.wait(sf::milliseconds(50)) == 0) {
+        if (!fdset.wait(sf::milliseconds(IP_LINK_RELAYED ? 160 : 50))) {
             return;
         }
 
         for (int i = 0; i < lanlink.numslaves; i++) {
-            numbytes = 0;
-            inbuffer[0] = 1;
-            while (numbytes < inbuffer[0]) {
-                size_t nr;
-                (void)tcpsocket[i + 1].receive(inbuffer + numbytes, inbuffer[0] - numbytes, nr);
-                numbytes += (int)nr;
+            if (!ReadCableFrame(tcpsocket[i + 1], inbuffer, 4, 4)) {
+                CloseLink();
+                return;
             }
-            if (inbuffer[1] == -32) {
+            if (static_cast<uint8_t>(inbuffer[1]) == 0xe0) {
                 char message[30];
                 snprintf(message, sizeof(message), _("Player %d disconnected."), i + 2);
                 systemScreenMessage(message);
-                outbuffer[0] = 4;
-                outbuffer[1] = -32;
-                for (i = 1; i < lanlink.numslaves; i++) {
-                    (void)tcpsocket[i].send(outbuffer, 12);
-                    size_t nr;
-                    (void)tcpsocket[i].receive(inbuffer, 256, nr);
-                    tcpsocket[i].disconnect();
-                }
                 CloseLink();
                 return;
             }
@@ -966,32 +980,28 @@ CableClient::CableClient(void)
 
 void CableClient::CheckConn(void)
 {
-    size_t nr;
-    (void)lanlink.tcpsocket.receive(inbuffer, 1, nr);
-    numbytes = (int)nr;
-    if (numbytes > 0) {
-        while (numbytes < inbuffer[0]) {
-            (void)lanlink.tcpsocket.receive(inbuffer + numbytes, inbuffer[0] - numbytes, nr);
-            numbytes += (int)nr;
-        }
-        if (inbuffer[1] == -32) {
-            outbuffer[0] = 4;
-            (void)lanlink.tcpsocket.send(outbuffer, 4);
-            systemScreenMessage(_("Server disconnected."));
-            CloseLink();
-            return;
-        }
-        transferring = true;
-        transfer_start_time_from_master = 0;
-        cable_data[0] = READ16LE(&uint16_tinbuffer[1]);
-        tspeed = inbuffer[1] & 3;
-        for (int i = 1, bytes = 4; i <= lanlink.numslaves; i++)
-            if (i != linkid) {
-                cable_data[i] = READ16LE(&uint16_tinbuffer[bytes]);
-                bytes++;
-            }
+    size_t nr = 0;
+    auto status = lanlink.tcpsocket.receive(inbuffer, 1, nr);
+    if (status == sf::Socket::Status::NotReady) return;
+    if (status != sf::Socket::Status::Done || nr != 1 ||
+        !ReadCableFrame(lanlink.tcpsocket, inbuffer, 6 + 2 * lanlink.numslaves, 12, 1)) {
+        CloseLink();
+        return;
     }
-    return;
+    if (static_cast<uint8_t>(inbuffer[1]) == 0xe0) {
+        systemScreenMessage(_("Server disconnected."));
+        CloseLink();
+        return;
+    }
+    transferring = true;
+    transfer_start_time_from_master = 0;
+    cable_data[0] = READ16LE(&uint16_tinbuffer[1]);
+    tspeed = inbuffer[1] & 3;
+    for (int i = 1, bytes = 4; i <= lanlink.numslaves; i++)
+        if (i != linkid) {
+            cable_data[i] = READ16LE(&uint16_tinbuffer[bytes]);
+            bytes++;
+        }
 }
 
 bool CableClient::RecvGB(void)
@@ -1043,20 +1053,15 @@ void CableClient::Recv(void)
     // old code used socket # instead of mask again
     fdset.add(lanlink.tcpsocket);
     // old code stripped off ms again
-    if (fdset.wait(sf::milliseconds(50)) == 0) {
+    if (!fdset.wait(sf::milliseconds(IP_LINK_RELAYED ? 160 : 50))) {
         transferring = false;
         return;
     }
-    numbytes = 0;
-    inbuffer[0] = 1;
-    size_t nr;
-    while (numbytes < inbuffer[0]) {
-        (void)lanlink.tcpsocket.receive(inbuffer + numbytes, inbuffer[0] - numbytes, nr);
-        numbytes += (int)nr;
+    if (!ReadCableFrame(lanlink.tcpsocket, inbuffer, 6 + 2 * lanlink.numslaves, 12)) {
+        CloseLink();
+        return;
     }
-    if (inbuffer[1] == -32) {
-        outbuffer[0] = 4;
-        (void)lanlink.tcpsocket.send(outbuffer, 4);
+    if (static_cast<uint8_t>(inbuffer[1]) == 0xe0) {
         systemScreenMessage(_("Server disconnected."));
         CloseLink();
         return;
@@ -1187,13 +1192,13 @@ static ConnectionState ConnectUpdateSocket(char* const message, size_t size)
                 uint16_t receivedId, receivedSlaves;
                 packet >> receivedId >> receivedSlaves;
 
-                if (packet) {
+                if (packet && receivedId > 0 && receivedId <= receivedSlaves && receivedSlaves <= 3) {
                     linkid = receivedId;
                     lanlink.numslaves = receivedSlaves;
 
                     snprintf(message, size, N_("Connected as #%d, Waiting for %d players to join"),
                         linkid + 1, lanlink.numslaves - linkid);
-                }
+                } else return LINK_ERROR;
             } else {
                 bool gameReady;
                 packet >> gameReady;
@@ -1326,7 +1331,7 @@ static void CloseSocket()
 // this may be necessary under MSW as well, but I wouldn't know how
 void CleanLocalLink()
 {
-#if !(defined __WIN32__ || defined _WIN32)
+#if !(defined __WIN32__ || defined _WIN32 || defined __ANDROID__)
     shm_unlink("/" LOCAL_LINK_NAME);
     for (int i = 0; i < 4; i++) {
         linkevent[sizeof(linkevent) - 2] = '1' + i;

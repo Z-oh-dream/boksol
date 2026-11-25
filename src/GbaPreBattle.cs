@@ -3,6 +3,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
+#if ANDROID
+using Bitmap = Boksol.FramePixels;
+#endif
 
 namespace Boksol
 {
@@ -17,13 +20,16 @@ namespace Boksol
                     CloseTo(image, 27, 77, 181, 24, 24) && CloseTo(image, 218, 79, 181, 24, 24));
         }
 
-        public static Task<bool> StartBattle(CoreSession session, bool isHost, CancellationToken stop)
+        public static Task<bool> StartBattle(CoreSession session, bool isHost, int players, CancellationToken stop)
         {
             return StartPreparedSession(session, isHost,
                 image => CloseTo(image, 35, 12, 0, 255, 0) && CloseTo(image, 42, 20, 255, 214, 0) &&
                     CloseTo(image, 4, 21, 255, 255, 107), stop,
                 image => CloseTo(image, 4, 5, 181, 107, 107) && CloseTo(image, 49, 48, 255, 74, 74) &&
-                    CloseTo(image, 148, 48, 255, 74, 74) && CloseTo(image, 25, 76, 206, 206, 206),
+                    CloseTo(image, 148, 48, 255, 74, 74) &&
+                    (players == 2 ? CloseTo(image, 25, 76, 206, 206, 206) :
+                        CloseTo(image, 49, 96, 255, 74, 74) &&
+                        (players == 3 || CloseTo(image, 148, 96, 255, 74, 74))),
                 image => CloseTo(image, 4, 5, 181, 107, 107) && CloseTo(image, 90, 49, 255, 255, 231) &&
                     CloseTo(image, 189, 49, 255, 255, 231) && CloseTo(image, 25, 76, 231, 156, 132) &&
                     CloseTo(image, 11, 100, 247, 198, 165) && CloseTo(image, 10, 108, 231, 156, 132));
@@ -35,7 +41,8 @@ namespace Boksol
             int step = -1;
             long stableSince = -1;
             var watch = Stopwatch.StartNew();
-            while (watch.ElapsedMilliseconds < 20000 && !session.Completion.IsCompleted)
+            int wait = session.IsRemote ? 42000 : 20000;
+            while (watch.ElapsedMilliseconds < wait && !session.Completion.IsCompleted)
             {
                 stop.ThrowIfCancellationRequested();
                 using (Bitmap image = session.Capture())

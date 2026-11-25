@@ -11,6 +11,7 @@
 extern uint16_t IP_LINK_PORT;
 
 extern std::string IP_LINK_BIND_ADDRESS;
+extern bool IP_LINK_RELAYED;
 
 /**
  * Link modes to be passed to InitLink

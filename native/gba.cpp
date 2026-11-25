@@ -1,5 +1,8 @@
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <string>
 #include "core/base/system.h"
@@ -10,7 +13,7 @@
 #include "core/gba/gbaRtc.h"
 #include "core/gba/gbaSound.h"
 
-#define GDS extern "C" __declspec(dllexport)
+#include "export.h"
 
 namespace {
 uint32_t buttons;
@@ -53,7 +56,14 @@ void systemSetTitle(const char*) {}
 bool systemPauseOnFrame() { return true; }
 bool systemReadJoypads() { return true; }
 uint32_t systemReadJoypad(int) { return buttons; }
-uint32_t systemGetClock() { return GetTickCount(); }
+uint32_t systemGetClock() {
+#ifdef _WIN32
+    return GetTickCount();
+#else
+    using namespace std::chrono;
+    return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+#endif
+}
 void systemGbPrint(uint8_t*, int, int, int, int) {}
 void systemScreenCapture(int) {}
 void systemDrawScreen() { frameReady = true; }
@@ -119,8 +129,10 @@ GDS int gds_open(const char* path, const char* save, const char* state, int save
 }
 
 GDS int gds_link(int host, const char* address, int port) {
+    if (host < 0 || host > 3 || !address || port < 1 || port > 65535) return -1;
     IP_LINK_PORT = static_cast<uint16_t>(port);
-    EnableLinkServer(host != 0, 1);
+    IP_LINK_RELAYED = std::strcmp(address, "127.0.0.1") == 0;
+    EnableLinkServer(host != 0, host ? host : 1);
     EnableSpeedHacks(false);
     SetLinkTimeout(3500);
     if (host) IP_LINK_BIND_ADDRESS = address;

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,7 +9,7 @@
 #include "Platform.h"
 #include "Savestate.h"
 
-#define GDS extern "C" __declspec(dllexport)
+#include "export.h"
 using namespace melonDS;
 
 LAN* gdsLan = nullptr;
@@ -17,7 +18,7 @@ bool gdsStopped = false;
 
 namespace {
 std::unique_ptr<NDS> console;
-std::unique_ptr<LAN> link;
+std::unique_ptr<LAN> lan;
 
 std::vector<u8> readFile(const char* path, u64 maxSize) {
     using namespace Platform;
@@ -39,8 +40,8 @@ GDS void gds_close() {
     if (console) console->Stop(Platform::StopReason::External);
     console.reset();
     gdsLan = nullptr;
-    if (link) link->EndSession();
-    link.reset();
+    if (lan) lan->EndSession();
+    lan.reset();
 }
 
 GDS int gds_open(const char* path, const char* save, const char* state, int, int role) {
@@ -77,28 +78,34 @@ GDS int gds_open(const char* path, const char* save, const char* state, int, int
     return 1;
 }
 
-GDS int gds_link(int host, const char* address, int) {
-    link = std::make_unique<LAN>();
-    bool started = host ? link->StartHost("GDS-1P", 2) : link->StartClient("GDS-2P", address);
-    if (!started) { link.reset(); return -1; }
-    gdsLan = link.get();
+GDS int gds_link(int host, const char* address, int port) {
+    if (host < 0 || host > 3 || !address || port < 1 || port > 65535) return -1;
+    bool relayed = std::strcmp(address, "127.0.0.1") == 0 && (host || port != 7064);
+    lan = std::make_unique<LAN>(relayed);
+    const auto linkPort = static_cast<u16>(port);
+    bool started = host
+        ? lan->StartHost("GDS-1P", host + 1, linkPort)
+        : lan->StartClient("GDS-2P", address, linkPort);
+    if (!started) { lan.reset(); return -1; }
+    gdsLan = lan.get();
     return 0;
 }
 
 GDS int gds_poll_link() {
-    if (!link) return -1;
-    link->Process();
-    const auto players = link->GetPlayerList();
-    if (players.size() != 2) return 0;
-    if (std::none_of(players.begin(), players.end(),
-                     [](const auto& player) { return player.Status == LAN::Player_Client; })) return 0;
-    link->Process(); // Flush the completed roster before the host waits on the control channel.
+    if (!lan) return -1;
+    lan->Process();
+    const auto players = lan->GetPlayerList();
+    if (players.size() != static_cast<size_t>(lan->GetMaxPlayers())) return 0;
+    if (std::count_if(players.begin(), players.end(), [](const auto& player) {
+            return player.Status == LAN::Player_Client;
+        }) != lan->GetMaxPlayers() - 1) return 0;
+    lan->Process(); // Flush the completed roster before the host waits on the control channel.
     return 1;
 }
 
 GDS int gds_step(uint32_t keys, int x, int y, uint32_t* pixels) {
     if (!console || gdsStopped) return -1;
-    if (link) link->Process();
+    if (lan) lan->Process();
     console->SetKeyMask(~keys);
     if (x >= 0 && y >= 0) console->TouchScreen(static_cast<u16>(x), static_cast<u16>(y));
     else console->ReleaseScreen();

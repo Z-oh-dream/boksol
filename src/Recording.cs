@@ -1,8 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+#if ANDROID
+using Android.Graphics;
+using Image = Android.Graphics.Bitmap;
+#else
 using System.Drawing;
 using System.Drawing.Imaging;
+#endif
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -150,6 +155,21 @@ namespace Boksol
         public const int MaxFrame = 512 * 1024;
         public static byte[] Frame(CoreSession session)
         {
+#if ANDROID
+            var pixels = new int[session.Width * session.Height];
+            if (!session.CopyPixels(pixels)) return null;
+            using var source = Bitmap.CreateBitmap(pixels, session.Width, session.Height, Bitmap.Config.Argb8888);
+            using var scaled = Bitmap.CreateBitmap(Recording.Width, Recording.Height, Bitmap.Config.Argb8888);
+            using var canvas = new Canvas(scaled);
+            using var output = new MemoryStream();
+            canvas.DrawColor(Color.Black);
+            float scale = Math.Min(scaled.Width / (float)source.Width, scaled.Height / (float)source.Height);
+            float x = (scaled.Width - source.Width * scale) / 2, y = (scaled.Height - source.Height * scale) / 2;
+            using var target = new RectF(x, y, scaled.Width - x, scaled.Height - y);
+            canvas.DrawBitmap(source, null, target, null);
+            return scaled.Compress(Bitmap.CompressFormat.Jpeg, 80, output) && output.Length <= MaxFrame
+                ? output.ToArray() : null;
+#else
             using (var frame = session.Capture())
             {
                 if (frame == null) return null;
@@ -165,10 +185,19 @@ namespace Boksol
                     return output.Length <= MaxFrame ? output.ToArray() : null;
                 }
             }
+#endif
         }
 
         public static Image Decode(byte[] bytes)
         {
+#if ANDROID
+            using var bounds = new BitmapFactory.Options { InJustDecodeBounds = true };
+            BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, bounds);
+            if (bounds.OutWidth != Recording.Width || bounds.OutHeight != Recording.Height)
+                throw new InvalidDataException("视频的画面尺寸不匹配。");
+            return BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length)
+                ?? throw new InvalidDataException("无法读取视频画面。");
+#else
             using (var memory = new MemoryStream(bytes, false))
             using (var image = Image.FromStream(memory, false, true))
             {
@@ -176,6 +205,7 @@ namespace Boksol
                     throw new InvalidDataException("视频的画面尺寸不匹配。");
                 return new Bitmap(image);
             }
+#endif
         }
 
     }

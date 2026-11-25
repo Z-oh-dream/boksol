@@ -16,6 +16,11 @@
 /outputs/
 /native-build/
 /native-ds-build/
+/.android-build/
+/android/bin/
+/android/obj/
+/server/bin/
+/server/obj/
 CMakeFiles/
 CMakeCache.txt
 *.exe

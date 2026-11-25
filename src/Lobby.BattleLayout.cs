@@ -49,8 +49,9 @@ namespace Boksol
                 Line(args.Graphics, Gold, 0, 0, 86, 0);
             };
 
-            Stretch(card, Caption("局域网配对", 21, Ink, true), 26, 24, 26, 48);
-            Stretch(card, Caption("双方使用相同的联机码和 ROM 版本。", 10, Quiet), 26, 76, 26, 28);
+            matchMode = Caption("局域网配对", 21, Ink, true);
+            Stretch(card, matchMode, 26, 24, 26, 48);
+            Stretch(card, Caption("房间玩家使用相同的联机码和 ROM 版本。", 10, Quiet), 26, 76, 26, 28);
             Place(card, Caption("联机码", 11, Ink, true), 26, 126, 141, 28);
             Place(card, invitation, 26, 164, card.Width - 200, 40);
             card.SizeChanged += (sender, args) => invitation.Width = Math.Max(30, card.ClientSize.Width - 200);
@@ -60,8 +61,10 @@ namespace Boksol
             Place(card, cancel, 192, 224, 106, 49);
 
             var statusPanel = SurfacePanel(InputColor, DockStyle.None);
-            Stretch(card, statusPanel, 26, 295, 26, 74);
-            Stretch(statusPanel, roomStatus, 14, 8, 14, 58);
+            Stretch(card, statusPanel, 26, 295, 26, 88);
+            Stretch(statusPanel, roomStatus, 14, 5, 14, 46);
+            roomPlayers = Caption("", 10, Mint);
+            Stretch(statusPanel, roomPlayers, 14, 49, 14, 34);
             Stretch(card, SurfacePanel(Outline, DockStyle.None), 26, 395, 26, 1);
             Place(card, ActionButton("观战", OpenSpectator), 26, 428, 112, 42);
             Place(card, share, 150, 428, 126, 42);

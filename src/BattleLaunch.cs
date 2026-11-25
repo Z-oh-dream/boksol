@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,11 +14,14 @@ namespace Boksol
         public static async Task<PreparedRom> Prepare(Game game, string data, GameImage image, byte[] save,
             CodeMatch match, CancellationToken stop)
         {
-            byte[] checkpoint = await Task.Run(() => BattleSaves.ReadStart(game, save, image.Hash, match.IsHost), stop);
-            string peer = await match.Exchange(checkpoint == null ? "ORIGINAL" : "CHECKPOINT", TimeSpan.FromSeconds(20), stop);
-            if (peer != "ORIGINAL" && peer != "CHECKPOINT") throw new IOException("对方的对战起点不兼容。");
-            if (peer == "ORIGINAL") checkpoint = null;
-            return await Task.Run(() => game.PrepareBattle(data, match.IsHost ? "host" : "guest", image, save, checkpoint), stop);
+            byte[] checkpoint = game.IsDs && match.Count > 2 ? null :
+                await Task.Run(() => BattleSaves.ReadStart(game, save, image.Hash, match.IsHost), stop);
+            string[] peers = await match.ExchangeAll(checkpoint == null ? "ORIGINAL" : "CHECKPOINT", TimeSpan.FromSeconds(20), stop);
+            if (peers.Any(peer => peer != "ORIGINAL" && peer != "CHECKPOINT"))
+                throw new IOException("对方的对战起点不兼容。");
+            if (peers.Contains("ORIGINAL")) checkpoint = null;
+            string role = match.Seat == 1 ? "host" : match.Seat == 2 ? "guest" : "guest-" + match.Seat;
+            return await Task.Run(() => game.PrepareBattle(data, role, image, save, checkpoint), stop);
         }
 
         public static async Task<string> Enter(Game game, PreparedRom rom, CoreSession session, CodeMatch match,
@@ -82,7 +86,7 @@ namespace Boksol
         {
             bool ready = match.IsHost && await GbaPreBattle.OpenRaceSetup(session, stop);
             string peer = await match.Exchange(match.IsHost ? (ready ? "RACE-SETUP" : "RACE-WAITING") : "RACE-READY",
-                TimeSpan.FromSeconds(25), stop);
+                TimeSpan.FromSeconds(session.IsRemote ? 50 : 25), stop);
             if (match.IsHost ? peer != "RACE-READY" : peer != "RACE-SETUP" && peer != "RACE-WAITING")
                 throw new IOException("对方的摩托车赛前状态无效。");
             if (!match.IsHost) return "摩托车对战 · 等待房主选择赛道";
@@ -93,21 +97,23 @@ namespace Boksol
         {
             const string startedState = "BATTLE-STARTED";
             const string watchState = "BATTLE-WATCH";
-            bool started = match.IsHost && await GbaPreBattle.StartBattle(session, true, stop);
-            string peer = await match.Exchange(match.IsHost ? (started ? startedState : Waiting) : watchState,
-                TimeSpan.FromSeconds(27), stop);
-            if (match.IsHost ? peer != watchState : peer != startedState && peer != Waiting)
+            int wait = session.IsRemote ? 50 : 27;
+            bool started = match.IsHost && await GbaPreBattle.StartBattle(session, true, match.Count, stop);
+            string[] peers = await match.ExchangeAll(match.IsHost ? (started ? startedState : Waiting) : watchState,
+                TimeSpan.FromSeconds(wait), stop);
+            if (match.IsHost ? peers.Any(peer => peer != watchState) :
+                (peers[0] != startedState && peers[0] != Waiting) || peers.Skip(1).Any(peer => peer != watchState))
                 throw new IOException("对方的原作对战状态无效。");
-            if (!match.IsHost && peer == startedState)
-                started = await GbaPreBattle.StartBattle(session, false, stop);
-            return await ConfirmBattle(started, match, 27, stop);
+            if (!match.IsHost && peers[0] == startedState)
+                started = await GbaPreBattle.StartBattle(session, false, match.Count, stop);
+            return await ConfirmBattle(started, match, wait, stop);
         }
 
         private static async Task<bool> ConfirmBattle(bool ready, CodeMatch match, int timeout, CancellationToken stop)
         {
-            string peer = await match.Exchange(ready ? Live : Waiting, TimeSpan.FromSeconds(timeout), stop);
-            if (peer != Live && peer != Waiting) throw new IOException("对方的原作对战状态无效。");
-            return ready && peer == Live;
+            string[] peers = await match.ExchangeAll(ready ? Live : Waiting, TimeSpan.FromSeconds(timeout), stop);
+            if (peers.Any(peer => peer != Live && peer != Waiting)) throw new IOException("对方的原作对战状态无效。");
+            return ready && peers.All(peer => peer == Live);
         }
     }
 }

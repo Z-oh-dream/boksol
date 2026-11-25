@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <memory>
 
 #ifdef __WIN32__
     #include <winsock2.h>
@@ -69,13 +70,14 @@ enum
     Cmd_PlayerList,         // 03 -- host->client -- broadcast updated player list
     Cmd_PlayerConnect,      // 04 -- both -- signal connected state (ready to receive MP frames)
     Cmd_PlayerDisconnect,   // 05 -- both -- signal disconnected state (not receiving MP frames)
+    Cmd_RelayedPresence,    // 06 -- host->client -- another client in a relayed room changed state
 };
 
 const int kDiscoveryPort = 7063;
 const int kLANPort = 7064;
 
 
-LAN::LAN() noexcept : Inited(false)
+LAN::LAN(bool relayed) noexcept : Inited(false), Relayed(relayed)
 {
     DiscoveryMutex = Platform::Mutex_Create();
     PlayersMutex = Platform::Mutex_Create();
@@ -221,14 +223,14 @@ void LAN::EndDiscovery()
         Active = false;
 }
 
-bool LAN::StartHost(const char* playername, int numplayers)
+bool LAN::StartHost(const char* playername, int numplayers, u16 port)
 {
     if (!Inited) return false;
     if (numplayers > 16) return false;
 
     ENetAddress addr;
-    addr.host = ENET_HOST_ANY;
-    addr.port = kLANPort;
+    addr.host = Relayed ? htonl(INADDR_LOOPBACK) : ENET_HOST_ANY;
+    addr.port = port;
 
     Host = enet_host_create(&addr, 16, 2, 0, 0);
     if (!Host)
@@ -257,11 +259,11 @@ bool LAN::StartHost(const char* playername, int numplayers)
     Active = true;
     IsHost = true;
 
-    StartDiscovery();
+    if (!Relayed) StartDiscovery();
     return true;
 }
 
-bool LAN::StartClient(const char* playername, const char* host)
+bool LAN::StartClient(const char* playername, const char* host, u16 port)
 {
     if (!Inited) return false;
 
@@ -272,8 +274,13 @@ bool LAN::StartClient(const char* playername, const char* host)
     }
 
     ENetAddress addr;
-    enet_address_set_host(&addr, host);
-    addr.port = kLANPort;
+    if (enet_address_set_host(&addr, host) != 0)
+    {
+        enet_host_destroy(Host);
+        Host = nullptr;
+        return false;
+    }
+    addr.port = port;
     ENetPeer* peer = enet_host_connect(Host, &addr, 2, 0);
     if (!peer)
     {
@@ -310,16 +317,17 @@ bool LAN::StartClient(const char* playername, const char* host)
             }
             else if (conn == 1 && event.type == ENET_EVENT_TYPE_RECEIVE)
             {
-                u8* data = event.packet->data;
-                if (event.channelID != Chan_Cmd) continue;
+                std::unique_ptr<ENetPacket, decltype(&enet_packet_destroy)> packet(event.packet, enet_packet_destroy);
+                if (event.channelID != Chan_Cmd || packet->dataLength != 11) continue;
+                u8* data = packet->data;
                 if (data[0] != Cmd_ClientInit) continue;
-                if (event.packet->dataLength != 11) continue;
 
                 u32 magic = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
                 u32 version = data[5] | (data[6] << 8) | (data[7] << 16) | (data[8] << 24);
                 if (magic != kLANMagic) continue;
                 if (version != kProtocolVersion) continue;
-                if (data[10] > 16) continue;
+                if (data[10] > 16 || data[9] == 0 || data[9] >= data[10]) continue;
+                if (Relayed && data[10] > 4) continue;
 
                 MaxPlayers = data[10];
 
@@ -347,6 +355,8 @@ bool LAN::StartClient(const char* playername, const char* host)
                 conn = 0;
                 break;
             }
+            else if (event.type == ENET_EVENT_TYPE_RECEIVE)
+                enet_packet_destroy(event.packet);
         }
         else
             break;
@@ -508,6 +518,19 @@ void LAN::ClientUpdatePlayerList()
 {
 }
 
+void LAN::HostSetConnectivity(int id, bool connected)
+{
+    if (connected) ConnectedBitmask |= (1 << id);
+    else ConnectedBitmask &= ~(1 << id);
+
+    if (Relayed && MaxPlayers > 2)
+    {
+        u8 cmd[] = {Cmd_RelayedPresence, static_cast<u8>(id), static_cast<u8>(connected)};
+        ENetPacket* packet = enet_packet_create(cmd, sizeof(cmd), ENET_PACKET_FLAG_RELIABLE);
+        if (packet) enet_host_broadcast(Host, Chan_Cmd, packet);
+    }
+}
+
 void LAN::ProcessHostEvent(ENetEvent& event)
 {
     switch (event.type)
@@ -572,7 +595,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
             Player* player = (Player*)event.peer->data;
             if (!player) break;
 
-            ConnectedBitmask &= ~(1 << player->ID);
+            HostSetConnectivity(player->ID, false);
 
             int id = player->ID;
             RemotePeers[id] = nullptr;
@@ -588,7 +611,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
 
     case ENET_EVENT_TYPE_RECEIVE:
         {
-            if (event.packet->dataLength < 1) break;
+            if (event.packet->dataLength < 1) { enet_packet_destroy(event.packet); break; }
 
             u8* data = (u8*)event.packet->data;
             switch (data[0])
@@ -610,7 +633,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                     player.Name[31] = '\0';
 
                     Player* hostside = (Player*)event.peer->data;
-                    if (player.ID != hostside->ID)
+                    if (!hostside || player.ID != hostside->ID)
                     {
                         enet_peer_disconnect(event.peer, 0);
                         break;
@@ -635,7 +658,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                     Player* player = (Player*)event.peer->data;
                     if (!player) break;
 
-                    ConnectedBitmask |= (1 << player->ID);
+                    HostSetConnectivity(player->ID, true);
                 }
                 break;
 
@@ -645,7 +668,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                     Player* player = (Player*)event.peer->data;
                     if (!player) break;
 
-                    ConnectedBitmask &= ~(1 << player->ID);
+                    HostSetConnectivity(player->ID, false);
                 }
                 break;
             }
@@ -711,7 +734,7 @@ void LAN::ProcessClientEvent(ENetEvent& event)
 
     case ENET_EVENT_TYPE_RECEIVE:
         {
-            if (event.packet->dataLength < 1) break;
+            if (event.packet->dataLength < 1) { enet_packet_destroy(event.packet); break; }
 
             u8* data = (u8*)event.packet->data;
             switch (data[0])
@@ -719,12 +742,22 @@ void LAN::ProcessClientEvent(ENetEvent& event)
             case Cmd_PlayerList: // host sending player list
                 {
                     if (event.packet->dataLength != (2+sizeof(Players))) break;
-                    if (data[1] > 16) break;
+                    if (Relayed && event.peer != RemotePeers[0]) break;
+                    if (data[1] > (Relayed ? MaxPlayers : 16)) break;
+                    Player listed[16];
+                    memcpy(listed, &data[2], sizeof(listed));
+                    bool valid = true;
+                    for (int i = 0; i < 16; i++)
+                    {
+                        if (listed[i].Status == Player_None) continue;
+                        if ((Relayed && i >= MaxPlayers) || listed[i].ID != i) { valid = false; break; }
+                    }
+                    if (!valid) break;
 
                     Platform::Mutex_Lock(PlayersMutex);
 
                     NumPlayers = data[1];
-                    memcpy(Players, &data[2], sizeof(Players));
+                    memcpy(Players, listed, sizeof(Players));
                     for (int i = 0; i < 16; i++)
                     {
                         Players[i].Name[31] = '\0';
@@ -732,6 +765,8 @@ void LAN::ProcessClientEvent(ENetEvent& event)
 
                     Platform::Mutex_Unlock(PlayersMutex);
 
+                    // In relayed rooms the host forwards other clients' wireless frames.
+                    if (Relayed) break;
                     // establish connections to any new clients
                     for (int i = 0; i < 16; i++)
                     {
@@ -774,6 +809,15 @@ void LAN::ProcessClientEvent(ENetEvent& event)
                     ConnectedBitmask &= ~(1 << player->ID);
                 }
                 break;
+
+            case Cmd_RelayedPresence:
+                {
+                    if (!Relayed || event.peer != RemotePeers[0] || event.packet->dataLength != 3 ||
+                        data[1] < 1 || data[1] >= MaxPlayers || data[1] == MyPlayer.ID || data[2] > 1) break;
+                    if (data[2]) ConnectedBitmask |= (1 << data[1]);
+                    else ConnectedBitmask &= ~(1 << data[1]);
+                }
+                break;
             }
 
             enet_packet_destroy(event.packet);
@@ -790,6 +834,18 @@ void LAN::ProcessEvent(ENetEvent& event)
         ProcessHostEvent(event);
     else
         ProcessClientEvent(event);
+}
+
+void LAN::RelayClientPacket(ENetPeer* source, const ENetPacket* packet)
+{
+    for (int id = 1; id < MaxPlayers; id++)
+    {
+        ENetPeer* destination = RemotePeers[id];
+        if (!destination || destination == source || Players[id].Status != Player_Client) continue;
+        ENetPacket* copy = enet_packet_create(packet->data, packet->dataLength, ENET_PACKET_FLAG_UNSEQUENCED);
+        if (copy && enet_peer_send(destination, Chan_MP, copy) != 0) enet_packet_destroy(copy);
+    }
+    enet_host_flush(Host);
 }
 
 // 0 = per-frame processing of events and eventual misc. frame
@@ -849,7 +905,11 @@ void LAN::ProcessLAN(int type)
                 good = false;
             else if (header->Magic != 0x4946494E)
                 good = false;
-            else if (header->SenderID == MyPlayer.ID)
+            else if (header->SenderID >= 16 || header->SenderID == MyPlayer.ID ||
+                     header->Length > event.packet->dataLength - sizeof(MPPacketHeader))
+                good = false;
+            else if (Relayed && IsHost &&
+                     (!event.peer->data || static_cast<Player*>(event.peer->data)->ID != header->SenderID))
                 good = false;
 
             if (!good)
@@ -858,6 +918,7 @@ void LAN::ProcessLAN(int type)
             }
             else
             {
+                if (Relayed && IsHost && MaxPlayers > 2) RelayClientPacket(event.peer, event.packet);
                 // mark this packet with the time it was received
                 header->Magic = (u32)Platform::GetMSCount();
 
@@ -1060,6 +1121,7 @@ u16 LAN::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
         RXQueue.pop();
         MPPacketHeader* header = (MPPacketHeader*)&enetpacket->data[0];
         bool good = true;
+        u32 aid = header->Type >> 16;
         if ((header->Type & 0xFFFF) != 2)
             good = false;
         else if (header->Timestamp < (timestamp - 32))
@@ -1068,11 +1130,10 @@ u16 LAN::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
         if (good)
         {
             u32 len = header->Length;
-            if (len)
+            if (len && aid >= 1 && aid <= 15)
             {
                 if (len > 1024) len = 1024;
 
-                u32 aid = header->Type >> 16;
                 memcpy(&packets[(aid-1)*1024], &enetpacket->data[sizeof(MPPacketHeader)], len);
 
                 ret |= (1<<aid);

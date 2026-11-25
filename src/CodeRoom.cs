@@ -16,7 +16,7 @@ namespace Boksol
         public const int DiscoveryPort = 39465;
         private const int CodeLength = 6;
         private const string CodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-        private const string Protocol = "GDS5";
+        private const string Protocol = "GDS6";
         private readonly CancellationTokenSource stop = new CancellationTokenSource();
         public CancellationToken Token { get { return stop.Token; } }
 
@@ -62,7 +62,16 @@ namespace Boksol
             return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
         }
 
-        public async Task<CodeMatch> Find(string code, string game, string hash)
+        public Task<CodeMatch> Find(string code, string game, string hash, Uri signalingServer = null,
+            string name = null, int seats = 2, IProgress<RoomRoster> progress = null)
+        {
+            name = RoomRoster.CleanName(name);
+            return signalingServer == null ? FindLocal(code, game, hash, name, progress) :
+                RemoteRoom.Connect(signalingServer, code, game, hash, name, seats, progress, stop.Token);
+        }
+
+        private async Task<CodeMatch> FindLocal(string code, string game, string hash,
+            string name, IProgress<RoomRoster> progress)
         {
             string ticket = Game.Hash(Encoding.ASCII.GetBytes(Protocol + "|" + code));
             string identity = Guid.NewGuid().ToString("N");
@@ -107,7 +116,8 @@ namespace Boksol
                                 {
                                     var candidate = await incoming;
                                     incoming = null;
-                                    CodeMatch match = await Handshake(candidate, true, ticket, identity, game, hash, timeout.Token);
+                                    CodeMatch match = await Handshake(candidate, true, ticket, identity, game, hash, name, timeout.Token);
+                                    if (match != null) progress?.Report(match.Roster);
                                     if (match != null) return match;
                                     incoming = listener.AcceptTcpClientAsync();
                                 }
@@ -135,7 +145,8 @@ namespace Boksol
                                             { candidate.Close(); continue; }
                                         }
                                     }
-                                    CodeMatch match = await Handshake(candidate, false, ticket, identity, game, hash, timeout.Token);
+                                    CodeMatch match = await Handshake(candidate, false, ticket, identity, game, hash, name, timeout.Token);
+                                    if (match != null) progress?.Report(match.Roster);
                                     if (match != null) return match;
                                 }
                             }
@@ -157,7 +168,7 @@ namespace Boksol
         }
 
         private static async Task<CodeMatch> Handshake(TcpClient candidate, bool host, string ticket,
-            string identity, string game, string hash, CancellationToken stop)
+            string identity, string game, string hash, string name, CancellationToken stop)
         {
             CodeMatch match;
             try { match = new CodeMatch(candidate, host); }
@@ -169,16 +180,19 @@ namespace Boksol
             bool keep = false;
             try
             {
-                string packet = await match.Exchange(Protocol + "|" + ticket + "|" + identity + "|" + game + "|" + hash,
+                string packet = await match.Exchange(Protocol + "|" + ticket + "|" + identity + "|" + game + "|" + hash +
+                    "|" + RoomRoster.EncodeName(name),
                     TimeSpan.FromSeconds(3), stop);
                 string[] fields = packet.Split('|');
                 Guid peerId;
-                if (fields.Length != 5 || fields[0] != Protocol || fields[1] != ticket ||
-                    !Guid.TryParseExact(fields[2], "N", out peerId)) return null;
+                if (fields.Length != 6 || fields[0] != Protocol || fields[1] != ticket ||
+                    !Guid.TryParseExact(fields[2], "N", out peerId) ||
+                    !RoomRoster.TryDecodeName(fields[5], out var peerName)) return null;
                 int difference = String.CompareOrdinal(identity, fields[2]);
                 if (difference == 0 || difference < 0 != host) return null;
                 if (fields[3] != game) throw new InvalidOperationException("已找到联机码，但双方选了不同的作品。");
                 if (fields[4] != hash) throw new InvalidOperationException("已找到联机码，但双方 ROM 或汉化补丁不同。");
+                match.Roster = new RoomRoster(2, host ? new[] { name, peerName } : new[] { peerName, name });
                 keep = true;
                 return match;
             }
@@ -222,41 +236,64 @@ namespace Boksol
 
     internal sealed class CodeMatch : IDisposable
     {
-        public readonly bool IsHost;
+        public int Seat { get; }
+        public bool IsHost { get { return Seat == 1; } }
+        public int Count { get { return Roster?.Capacity ?? 2; } }
+        public RoomRoster Roster { get; internal set; }
         public string LocalAddress { get { return ((IPEndPoint)peer.Client.LocalEndPoint).Address.ToString(); } }
         public string RemoteAddress { get { return ((IPEndPoint)peer.Client.RemoteEndPoint).Address.ToString(); } }
         private readonly TcpClient peer;
         private readonly NetworkStream stream;
+        public readonly RemoteRoom Remote;
+        private int disposed;
 
         public CodeMatch(TcpClient peer, bool host)
         {
             this.peer = peer;
-            IsHost = host;
+            Seat = host ? 1 : 2;
             peer.NoDelay = true;
             stream = peer.GetStream();
         }
 
+        internal CodeMatch(RemoteRoom remote, int seat, RoomRoster roster)
+        {
+            Remote = remote;
+            Seat = seat;
+            Roster = roster;
+        }
+
         public async Task<string> Exchange(string line, TimeSpan wait, CancellationToken stop)
+        {
+            return (await ExchangeAll(line, wait, stop))[0];
+        }
+
+        public async Task<string[]> ExchangeAll(string line, TimeSpan wait, CancellationToken stop)
         {
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop))
             {
                 timeout.CancelAfter(wait);
-                using (timeout.Token.Register(peer.Close))
+                using (timeout.Token.Register(() => peer?.Close()))
                 {
                     try
                     {
+                        if (Remote != null)
+                        {
+                            await Remote.SendControl(line, timeout.Token);
+                            var replies = await Remote.ReadControls(timeout.Token);
+                            foreach (string reply in replies) CheckPeerFailure(reply);
+                            return replies;
+                        }
                         byte[] outgoing = Encoding.ASCII.GetBytes(line + "\n");
                         await stream.WriteAsync(outgoing, 0, outgoing.Length);
                         var response = new StringBuilder();
                         byte[] b = new byte[1];
-                        while (response.Length < 210 && await stream.ReadAsync(b, 0, 1) == 1)
+                        while (response.Length < 300 && await stream.ReadAsync(b, 0, 1) == 1)
                         {
                             if (b[0] == 10)
                             {
                                 string message = response.ToString();
-                                if (message.StartsWith("ERROR|", StringComparison.Ordinal))
-                                    throw ReadPeerFailure(message.Substring(6));
-                                return message;
+                                CheckPeerFailure(message);
+                                return new[] { message };
                             }
                             if (b[0] < 32 || b[0] > 126) break;
                             response.Append((char)b[0]);
@@ -281,24 +318,90 @@ namespace Boksol
             if (String.IsNullOrWhiteSpace(reason)) return;
             // Keep the report within the existing bounded, ASCII-framed control protocol.
             string brief = reason.Substring(0, Math.Min(42, reason.Length));
-            byte[] data = Encoding.ASCII.GetBytes("ERROR|" +
-                Convert.ToBase64String(Encoding.UTF8.GetBytes(brief)) + "\n");
+            string message = "ERROR|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(brief));
             try
             {
                 using (var deadline = new CancellationTokenSource(500))
-                using (deadline.Token.Register(peer.Close))
-                    await stream.WriteAsync(data, 0, data.Length);
+                using (deadline.Token.Register(() => peer?.Close()))
+                {
+                    if (Remote != null) await Remote.SendControl(message, deadline.Token);
+                    else
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes(message + "\n");
+                        await stream.WriteAsync(data, 0, data.Length);
+                    }
+                }
             }
-            catch (Exception ex) when (ex is IOException || ex is SocketException || ex is ObjectDisposedException) { }
+            catch (Exception ex) when (ex is IOException || ex is SocketException ||
+                ex is ObjectDisposedException || ex is OperationCanceledException) { }
         }
 
-        private static IOException ReadPeerFailure(string payload)
+        private static void CheckPeerFailure(string message)
         {
-            try { return new PeerMatchException("对方准备失败。 " + Encoding.UTF8.GetString(Convert.FromBase64String(payload))); }
-            catch (FormatException) { return new PeerMatchException("对方准备游戏失败。"); }
+            if (!message.StartsWith("ERROR|", StringComparison.Ordinal)) return;
+            try { throw new PeerMatchException("对方准备失败。 " + Encoding.UTF8.GetString(Convert.FromBase64String(message.Substring(6)))); }
+            catch (FormatException) { throw new PeerMatchException("对方准备游戏失败。"); }
         }
 
-        public void Dispose() { peer.Close(); }
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+            if (Remote != null) Remote.Release();
+            else peer.Close();
+        }
+    }
+
+    internal sealed class RoomRoster
+    {
+        internal const int NameLimit = 16;
+        internal const string NameKey = "player-name";
+        internal const string SeatsKey = "room-player-count";
+        private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+        public int Capacity { get; }
+        private readonly string[] names;
+
+        public RoomRoster(int capacity, string[] names)
+        {
+            Capacity = capacity;
+            this.names = names;
+        }
+
+        public int Joined { get { return names.Length; } }
+        public string Name(int seat)
+        {
+            return seat <= names.Length && names[seat - 1].Length > 0 ? names[seat - 1] : "玩家 " + seat;
+        }
+
+        public string Summary()
+        {
+            return String.Join(" / ", Enumerable.Range(1, Joined).Select(Name));
+        }
+
+        internal static string CleanName(string value)
+        {
+            var normalized = new String((value ?? "").Where(c => !Char.IsControl(c)).Take(NameLimit + 1).ToArray()).Trim();
+            int end = Math.Min(NameLimit, normalized.Length);
+            if (end > 0 && Char.IsHighSurrogate(normalized[end - 1])) end--;
+            string result = normalized.Substring(0, end).TrimEnd();
+            try { Utf8.GetByteCount(result); return result; }
+            catch (EncoderFallbackException) { return ""; }
+        }
+
+        internal static string EncodeName(string name) { return Convert.ToBase64String(Utf8.GetBytes(name)); }
+
+        internal static bool TryDecodeName(string value, out string name)
+        {
+            name = "";
+            if (value.Length > 64) return false;
+            try
+            {
+                var decoded = Utf8.GetString(Convert.FromBase64String(value));
+                if (decoded != CleanName(decoded)) return false;
+                name = decoded;
+                return true;
+            }
+            catch (Exception ex) when (ex is FormatException || ex is DecoderFallbackException) { return false; }
+        }
     }
 
     internal sealed class PeerMatchException : IOException
