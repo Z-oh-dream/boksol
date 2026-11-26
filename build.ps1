@@ -1,4 +1,6 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# SPDX-License-Identifier: MPL-2.0
+
+$ErrorActionPreference = 'Stop'
 $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $compiler = & $installer -latest -products '*' -find 'MSBuild\**\Bin\Roslyn\csc.exe' | Select-Object -First 1
 if (-not $compiler) { throw '未找到 Visual Studio Roslyn C# 编译器。' }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 #pragma once
 #ifndef _WIN32
 #include_next <dirent.h>

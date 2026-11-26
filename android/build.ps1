@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 param(
     [string]$AndroidSdk = $env:ANDROID_HOME,
     [string]$Jdk = $env:JAVA_HOME,

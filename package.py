@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 import argparse
 import re
 import subprocess
@@ -7,7 +9,7 @@ from pathlib import Path
 
 
 PROJECT = "boksol"
-ROOT_FILES = (".gitignore", "README.md", "build.ps1", "package.py", "说明.txt")
+ROOT_FILES = (".gitignore", "LICENSE", "README.md", "build.ps1", "package.py", "说明.txt")
 SERVER_FILES = (".gitignore", "Boksol.Server.csproj", "Program.cs", "README.md")
 VENDOR_TREES = ("vbam", "melonds", "native-deps/enet")
 VENDOR_EXCLUDED_DIRS = {".git", ".vs", ".idea", "build", "CMakeFiles", "__pycache__"}
@@ -88,7 +90,9 @@ def package_source(work: Path, version: str) -> Path:
 
 def package_server(work: Path, version: str) -> Path:
     target = work / "outputs" / f"{PROJECT}-{version}-server-source.zip"
-    return write_archive(target, {name: work / "server" / name for name in SERVER_FILES})
+    contents = {name: work / "server" / name for name in SERVER_FILES}
+    contents["LICENSE"] = work / "LICENSE"
+    return write_archive(target, contents)
 
 
 def package(work: Path, version: str) -> Path:
@@ -96,6 +100,7 @@ def package(work: Path, version: str) -> Path:
     executable = f"{PROJECT}.exe"
     contents = {
         executable: stage / executable,
+        "LICENSE": work / "LICENSE",
         "使用说明.txt": work / "说明.txt",
         "engines/gds-gba.dll": stage / "engines/gds-gba.dll",
         "engines/gds-ds.dll": stage / "engines/gds-ds.dll",
