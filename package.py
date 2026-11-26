@@ -16,10 +16,12 @@ VENDOR_EXCLUDED_SUFFIXES = {
     ".exe", ".dll", ".so", ".o", ".obj", ".a", ".lib", ".pdb",
     ".zip", ".bin", ".pcap", ".pkt", ".pyc",
 }
-LOCAL_ASSETS = (
-    "src/solar.ico", "src/solar.png",
+BUNDLED_PRESETS = (
     "src/assets/boktai2.sav", "src/assets/boktai2.start.sgm",
     "src/assets/boktai3.sav", "src/assets/boktai3.start.sgm",
+)
+LOCAL_ASSETS = (
+    "src/solar.ico", "src/solar.png",
     "src/assets/boktaids.sav", "src/assets/boktaids.host.start.ml1",
     "src/assets/boktaids.guest.start.ml1",
 )
@@ -45,6 +47,8 @@ def source_files(work: Path, include_local_assets: bool):
     files = [work / name for name in ROOT_FILES]
     files.extend(work / "server" / name for name in SERVER_FILES)
     files.extend((work / "src").glob("*.cs"))
+    files.extend(path for path in (work / "src/localization").iterdir() if path.suffix in {".tsv", ".bin", ".md", ".xlsx"})
+    files.extend(work / name for name in BUNDLED_PRESETS if (work / name).is_file())
     android = work / "android"
     if android.is_dir():
         files.extend(android.glob("*.cs"))

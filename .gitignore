@@ -1,6 +1,6 @@
 # Local game files and runtime data
 /data/
-/src/assets/
+/src/assets/*
 /src/solar.ico
 /src/solar.png
 *.gba
@@ -10,6 +10,10 @@
 *.sa1
 *.sgm
 *.ml1
+!/src/assets/boktai2.sav
+!/src/assets/boktai2.start.sgm
+!/src/assets/boktai3.sav
+!/src/assets/boktai3.start.sgm
 
 # Build and release output
 /stage/

@@ -21,28 +21,32 @@ namespace Boksol
         private readonly int[] buffer;
 #else
         private readonly Bitmap buffer;
+        private readonly Bitmap localizedBuffer;
 #endif
+        private readonly int[] localizedPixels;
         private readonly object frameLock = new object();
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private Task worker;
-        private bool hasFrame, disposed;
+        private bool hasFrame, hasLocalizedFrame, disposed;
         private int keyboard, automatic, sunlight, frameNumber, touch = -1, autoTouch = -1;
         public readonly bool IsDs;
         public bool IsRemote { get { return remote != null; } }
         public readonly int Width, Height;
         public Task Completion { get { return worker; } }
 
-        private CoreSession(NativeGameCore core, bool isDs, List<RemoteGameLink> remote)
+        private CoreSession(NativeGameCore core, bool isDs, bool translateDs, List<RemoteGameLink> remote)
         {
             this.core = core;
             this.remote = remote;
             IsDs = isDs;
             Width = isDs ? 256 : 240;
             Height = isDs ? 384 : 160;
+            if (translateDs) localizedPixels = new int[Width * Height];
 #if ANDROID
             buffer = new int[Width * Height];
 #else
             buffer = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+            if (translateDs) localizedBuffer = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
 #endif
         }
 
@@ -88,7 +92,7 @@ namespace Boksol
                     }
                     await Connect(core, match, port, remote, stop);
                 }
-                var session = new CoreSession(core, game.IsDs, remote);
+                var session = new CoreSession(core, game.IsDs, game.IsDs && rom.Hash == game.KnownHash, remote);
                 session.worker = Task.Factory.StartNew(session.Run, CancellationToken.None,
                     TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 return session;
@@ -164,13 +168,13 @@ namespace Boksol
                     {
                         lock (frameLock)
                         {
+                            // The original frame remains available to the menu driver.
+                            hasLocalizedFrame = localizedPixels != null && DsOfficialText.Apply(pixels, localizedPixels);
 #if ANDROID
                             Array.Copy(pixels, buffer, pixels.Length);
 #else
-                            var image = buffer.LockBits(new Rectangle(0, 0, Width, Height),
-                                ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-                            try { Marshal.Copy(pixels, 0, image.Scan0, pixels.Length); }
-                            finally { buffer.UnlockBits(image); }
+                            StorePixels(buffer, pixels);
+                            if (hasLocalizedFrame) StorePixels(localizedBuffer, localizedPixels);
 #endif
                             hasFrame = true;
                         }
@@ -200,7 +204,7 @@ namespace Boksol
             lock (frameLock)
             {
                 if (!hasFrame || disposed) return false;
-                Array.Copy(buffer, destination, buffer.Length);
+                Array.Copy(hasLocalizedFrame ? localizedPixels : buffer, destination, buffer.Length);
                 return true;
             }
         }
@@ -210,9 +214,22 @@ namespace Boksol
             lock (frameLock) return hasFrame && !disposed ? (Bitmap)buffer.Clone() : null;
         }
 
+        public Bitmap CaptureDisplay()
+        {
+            lock (frameLock)
+                return hasFrame && !disposed ? (Bitmap)(hasLocalizedFrame ? localizedBuffer : buffer).Clone() : null;
+        }
+
         public void Draw(Graphics graphics, Rectangle target)
         {
-            lock (frameLock) if (hasFrame && !disposed) graphics.DrawImage(buffer, target);
+            lock (frameLock) if (hasFrame && !disposed) graphics.DrawImage(hasLocalizedFrame ? localizedBuffer : buffer, target);
+        }
+
+        private void StorePixels(Bitmap target, int[] pixels)
+        {
+            var data = target.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try { Marshal.Copy(pixels, 0, data.Scan0, pixels.Length); }
+            finally { target.UnlockBits(data); }
         }
 #endif
 
@@ -265,6 +282,7 @@ namespace Boksol
                 disposed = true;
 #if !ANDROID
                 buffer.Dispose();
+            localizedBuffer?.Dispose();
 #endif
             }
             shutdown.Dispose();

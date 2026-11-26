@@ -361,7 +361,8 @@ namespace Boksol
             if (!RequireRom()) return;
             Game game = Current;
             var dialog = new AlertDialog.Builder(this).SetTitle("汉化补丁")
-                .SetMessage(game.PatchPath == null ? "可导入 IPS 或 BPS 补丁。" : "已应用汉化补丁。")
+                .SetMessage(game.PatchPath != null ? "已应用汉化补丁。" : OfficialText.Supports(game, game.OriginalHash)
+                    ? "当前原版 ROM 已启用内置联机中文。" : "可导入 IPS 或 BPS 补丁。")
                 .SetPositiveButton("导入补丁", (_, _) => Pick(PatchPicker))
                 .SetNegativeButton("关闭", (_, _) => { });
             if (game.PatchPath != null)

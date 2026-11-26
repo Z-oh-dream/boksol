@@ -26,9 +26,16 @@ namespace Boksol
     {
         private const string BuiltInId = "preset";
         private const int MaxBytes = 1024 * 1024;
+        private const string Boktai2CheckpointSave = "86878d00c60ae48ad3457b1b3c92090328fe122497c5c3b0de1359237ea60489";
+        private const string Boktai3CheckpointSave = "5fbcb935c9003c58df9f6b6a08520f1c996f3e7b1e4fa48034a5f28c69364fc6";
         private static readonly Assembly App = typeof(BattleSaves).Assembly;
 
         private static string PresetName(Game game) { return "battle." + game.Id + ".sav"; }
+
+        private static bool SupportsPreset(Game game, string hash)
+        {
+            return hash == game.KnownHash || GbaOfficialText.Supports(game.Id, hash);
+        }
 
         public static BattleSave[] List(string data, Game game, string hash)
         {
@@ -78,7 +85,7 @@ namespace Boksol
                     include("sidecar-sa1", "ROM 同目录 · " + Path.GetFileName(oldSave), oldSave);
                 }
             }
-            if (hash == game.KnownHash && App.GetManifestResourceInfo(PresetName(game)) != null)
+            if (SupportsPreset(game, hash) && App.GetManifestResourceInfo(PresetName(game)) != null)
                 saves.Add(new BattleSave(BuiltInId, "内置对战存档", null, true));
             return saves.ToArray();
         }
@@ -108,7 +115,7 @@ namespace Boksol
         {
             if (save == null) throw new InvalidOperationException("请先选择、新建或导入对战存档。");
             if (!save.IsBuiltIn) return ReadFile(game, hash, save.Path);
-            if (hash != game.KnownHash) throw new InvalidDataException("内置对战档与当前 ROM 版本不匹配。");
+            if (!SupportsPreset(game, hash)) throw new InvalidDataException("内置对战档与当前 ROM 版本不匹配。");
             byte[] preset = ReadPreset(game, hash);
             if (preset == null) throw new InvalidDataException("当前版本没有随附对战存档。");
             return preset;
@@ -116,19 +123,32 @@ namespace Boksol
 
         public static byte[] ReadPreset(Game game, string hash)
         {
-            if (hash != game.KnownHash) return null;
+            if (!SupportsPreset(game, hash)) return null;
             byte[] preset = ReadResource(PresetName(game));
+            if (preset != null && hash == GbaOfficialText.Boktai2Original && preset.Length == 32768)
+            {
+                // The original cartridge uses 8 KiB EEPROM. The Chinese SRAM preset pads the same records to 32 KiB.
+                if (preset.Skip(8192).Any(value => value != 0xFF)) return null;
+                Array.Resize(ref preset, 8192);
+            }
             return preset == null ? null : Validate(game, preset);
         }
 
         public static byte[] ReadStart(Game game, byte[] save, string hash, bool isHost)
         {
-            // The checkpoint contains loaded profile state and is safe only for the matching battery data.
+            // Checkpoints contain loaded profile state, so each one is bound to its source battery.
             if (hash != game.KnownHash) return null;
-            byte[] preset = ReadResource(PresetName(game));
-            if (preset == null || !save.SequenceEqual(preset)) return null;
             string name = "battle." + game.Id + ".start";
-            if (game.IsDs) name += isHost ? ".host" : ".guest";
+            if (game.IsDs)
+            {
+                byte[] preset = ReadResource(PresetName(game));
+                if (preset == null || !save.SequenceEqual(preset)) return null;
+                name += isHost ? ".host" : ".guest";
+            }
+            else if (Game.Hash(save) != (game.Id == "boktai2" ? Boktai2CheckpointSave : Boktai3CheckpointSave))
+            {
+                return null;
+            }
             return ReadResource(name);
         }
 

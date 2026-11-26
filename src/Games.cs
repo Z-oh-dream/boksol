@@ -176,7 +176,9 @@ namespace Boksol
             string folder = Path.Combine(dataRoot, "game-data", Id, image.Hash, profile);
             Directory.CreateDirectory(folder);
             string copy = Path.Combine(folder, Id + Extension);
-            if (!File.Exists(copy) || ReadHash(copy) != image.Hash) AtomicWrite(copy, image.Content);
+            byte[] content = GbaOfficialText.Apply(this, image);
+            string storedHash = content == image.Content ? image.Hash : Hash(content);
+            if (!File.Exists(copy) || ReadHash(copy) != storedHash) AtomicWrite(copy, content);
             return new PreparedRom(copy, image.Hash);
         }
 

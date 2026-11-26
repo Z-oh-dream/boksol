@@ -310,7 +310,7 @@ namespace Boksol
             clearPatch = ActionButton("移除补丁", ClearPatch);
             AtRight(settings, choosePatch, 132, 270, 132, 38);
             AtRight(settings, clearPatch, 132, 316, 132, 38);
-            Stretch(settings, Caption("可导入 IPS / BPS，或直接选择已打补丁的同编号 ROM。双方需使用同一份游戏版本。", 10, Quiet), 2, 329, 144, 55);
+            Stretch(settings, Caption("支持的日文原版载入内置联机中文。其他汉化版本也可导入，所有玩家需使用同一 ROM 版本。", 10, Quiet), 2, 329, 144, 55);
             var folder = ActionButton("打开存档目录", () => ShowFolder(Path.Combine(data, "game-data")));
             var terms = ActionButton("查看 TPL 术语", ShowGuide);
             Place(settings, folder, 2, 406, 147, 38);
@@ -489,6 +489,11 @@ namespace Boksol
                 game.OriginalHash = hash;
                 selectedHash = effectiveHash;
                 string editionName = hash == game.KnownHash ? game.KnownLanguage : "自选版本";
+                if (OfficialText.Supports(game, effectiveHash))
+                {
+                    editionName = "原版日文 · 内置联机中文";
+                    if (game.PatchPath == null) patchLabel.Text = "已启用内置联机中文";
+                }
                 if (game.PatchPath != null) editionName += " · 已选补丁";
                 language.Text = game.Platform + "   /   " + editionName;
                 featuredStatus.Text = language.Text;

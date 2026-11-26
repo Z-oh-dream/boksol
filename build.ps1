@@ -30,7 +30,9 @@ try {
     foreach ($entry in @(@('native-build', 'gds-gba.dll'), @('native-ds-build', 'gds-ds.dll'))) {
         Copy-Item -LiteralPath (Join-Path $entry[0] ('Release\' + $entry[1])) -Destination 'stage\engines'
     }
-    & $compiler /nologo /target:winexe /platform:x64 /optimize+ /utf8output /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Microsoft.VisualBasic.dll '/out:stage\boksol.exe' @branding @presets @source
+    $localization = @(Get-ChildItem -LiteralPath 'src\localization' -File | Where-Object Extension -in '.tsv', '.bin' |
+        ForEach-Object { "/resource:$($_.FullName),boksol.text.$($_.Name)" })
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ /utf8output /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:Microsoft.VisualBasic.dll '/out:stage\boksol.exe' @branding @presets @localization @source
     if ($LASTEXITCODE -ne 0) { throw 'boksol 编译失败。' }
 }
 finally {

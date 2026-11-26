@@ -170,7 +170,7 @@ namespace Boksol
             return scaled.Compress(Bitmap.CompressFormat.Jpeg, 80, output) && output.Length <= MaxFrame
                 ? output.ToArray() : null;
 #else
-            using (var frame = session.Capture())
+            using (var frame = session.CaptureDisplay())
             {
                 if (frame == null) return null;
                 using (var scaled = new Bitmap(Recording.Width, Recording.Height, PixelFormat.Format24bppRgb))
