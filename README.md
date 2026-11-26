@@ -43,6 +43,14 @@ python package.py 0.5.4 --source
 
 编译完成并将 Visual C++ x64 运行库的 `msvcp140.dll`、`vcruntime140.dll` 和 `vcruntime140_1.dll` 放入 `stage/engines/` 后，可以运行 `python package.py 0.5.4` 生成 Windows 便携包。
 
-## 上游项目和授权
+## License / 开源协议
 
-引擎版本、上游提交和原生构建配置见 [原生核心构建说明](native/README.md)。VBA-M、melonDS 和 ENet 保留原有授权文件。boksol 自有代码的发布授权尚待项目维护者确定。
+boksol 自有源代码采用 Mozilla Public License 2.0（MPL-2.0）。分发受 MPL-2.0 约束的文件或相应可执行程序时，按协议提供对应源代码。[许可证全文](LICENSE)
+
+boksol's original source code is licensed under the Mozilla Public License 2.0 (MPL-2.0). [Full license text](LICENSE)
+
+VBA-M、melonDS 和 ENet 沿用各自的上游许可证。[VBA-M](vbam/doc/License.txt) · [melonDS](melonds/LICENSE) · [ENet](native-deps/enet/LICENSE)
+
+分发包含模拟器内核的构建时，适用相应的上游条款。MPL-2.0 第 3.3 节规定了与 GPL 许可代码组合分发的条件。版本和其他依赖见 [原生核心构建说明](native/README.md)。
+
+游戏、品牌图案、游戏存档、模拟器快照和本地化资源中涉及的第三方权利归各自的权利人。
